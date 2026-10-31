@@ -275,6 +275,16 @@ Insufficient memory rejects that request while preserving the preceding capture
 ID, published JPEG and readers. Placement, resolution, quality and
 `max_jpeg_size` remain unchanged; there is no fallback to a different heap.
 
+For an LVGL capture, the additional image admission is
+`width * height * 2 + ceil(width * height / 8) + max_jpeg_size` bytes. The largest
+single block is `max(width * height * 2, max_jpeg_size)`. The MIPI provider does
+not need the LVGL coverage map. Already published or leased JPEGs and persistent
+encoder/worker storage remain part of the heap use measured before admission.
+The diagnostic refusal reports the required total/largest block, measured
+free/largest block and requested memory capabilities; a subsequent allocation
+failure identifies its stage. A failed capture leaves the previous image ready
+for readers, so use status and a changed capture ID to confirm freshness.
+
 After encoding, raw pixels and LVGL coverage are released. Published or leased
 JPEG data stays immutable; retired JPEG data is released after its final reader.
 A private writer buffer can shrink before publication, while a failed shrink
