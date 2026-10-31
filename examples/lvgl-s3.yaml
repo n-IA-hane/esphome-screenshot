@@ -1,0 +1,62 @@
+# Compile-only example. Adapt display pins/model, PSRAM and Wi-Fi to your board.
+esphome:
+  name: screenshot-lvgl-s3
+  min_version: 2026.10.0
+  compile_process_limit: 2
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  ssid: screenshot-example
+  password: example-password
+
+external_components:
+  - source:
+      type: local
+      path: ../esphome/components
+    components: [esp_screenshot]
+
+spi:
+  clk_pin: GPIO14
+  mosi_pin: GPIO13
+
+display:
+  - platform: ili9xxx
+    id: screen
+    model: GC9A01A
+    cs_pin: GPIO15
+    dc_pin: GPIO16
+    invert_colors: false
+    auto_clear_enabled: false
+    update_interval: never
+
+lvgl:
+  id: lvgl_ui
+  displays: [screen]
+  widgets:
+    - label:
+        text: Screenshot example
+        align: CENTER
+
+esp_screenshot:
+  id: screen_capture
+  lvgl_id: lvgl_ui
+  path: screen
+  quality: 85
+  max_jpeg_size: 65536
+  capture_id:
+    name: Screenshot ID
+  capture_status:
+    name: Screenshot status
+
+packages:
+  screenshot: !include ../packages/screenshot.yaml

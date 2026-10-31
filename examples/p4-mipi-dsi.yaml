@@ -1,0 +1,32 @@
+# Optional fragment for existing ESP32-P4 ESP-IDF firmware with PSRAM, network
+# connectivity and an RGB565 mipi_dsi display whose ID is main_display.
+# The provider stays in Intercom; it is not copied into this repository.
+# This file is a package fragment, not a complete board/network configuration.
+external_components:
+  - source:
+      type: git
+      url: https://github.com/n-IA-hane/esphome-screenshot
+      ref: dev
+      path: esphome/components
+    components: [esp_screenshot]
+  - source:
+      type: git
+      url: https://github.com/n-IA-hane/esphome-intercom
+      ref: dev
+      path: esphome/components
+    components: [mipi_dsi]
+
+esp_screenshot:
+  id: screen_capture
+  mipi_dsi_id: main_display
+  rotation: 0
+  path: screen
+  quality: 85
+  max_jpeg_size: 262144
+  capture_id:
+    name: Screenshot ID
+  capture_status:
+    name: Screenshot status
+
+packages:
+  screenshot: !include ../packages/screenshot.yaml
