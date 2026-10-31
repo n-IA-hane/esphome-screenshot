@@ -358,18 +358,31 @@ bool EspScreenshot::reserve_capture_buffers_() {
   const size_t largest = this->pixel_size_ > this->jpeg_capacity_ ? this->pixel_size_ : this->jpeg_capacity_;
   // Admit the whole temporary working set before copying any display data.
   // Concurrent allocation can still fail; cancel_capture_ rolls it all back.
-  if (heap_caps_get_free_size(caps) < needed || heap_caps_get_largest_free_block(caps) < largest)
+  const size_t actual_free = heap_caps_get_free_size(caps);
+  const size_t actual_largest = heap_caps_get_largest_free_block(caps);
+  if (actual_free < needed || actual_largest < largest) {
+    ESP_LOGW(TAG, "Image buffer admission refused: required_total=%u required_largest=%u actual_free=%u actual_largest=%u caps=0x%08x",
+             unsigned(needed), unsigned(largest), unsigned(actual_free), unsigned(actual_largest), unsigned(caps));
     return false;
+  }
   this->pixels_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(16, this->pixel_size_, caps));
-  if (this->pixels_ == nullptr)
+  if (this->pixels_ == nullptr) {
+    ESP_LOGW(TAG, "Image buffer allocation failed: stage=raw bytes=%u caps=0x%08x", unsigned(this->pixel_size_), unsigned(caps));
     return false;
+  }
   if (coverage_bytes != 0) {
     this->coverage_ = static_cast<uint8_t *>(heap_caps_malloc(coverage_bytes, caps));
-    if (this->coverage_ == nullptr)
+    if (this->coverage_ == nullptr) {
+      ESP_LOGW(TAG, "Image buffer allocation failed: stage=coverage bytes=%u caps=0x%08x", unsigned(coverage_bytes), unsigned(caps));
       return false;
+    }
   }
   this->jpeg_[this->writing_slot_] = static_cast<uint8_t *>(heap_caps_malloc(this->jpeg_capacity_, caps));
-  return this->jpeg_[this->writing_slot_] != nullptr;
+  if (this->jpeg_[this->writing_slot_] == nullptr) {
+    ESP_LOGW(TAG, "Image buffer allocation failed: stage=JPEG bytes=%u caps=0x%08x", unsigned(this->jpeg_capacity_), unsigned(caps));
+    return false;
+  }
+  return true;
 }
 
 void EspScreenshot::release_capture_buffers_() {
