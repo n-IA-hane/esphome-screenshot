@@ -39,6 +39,10 @@ public:
     if (index >= 0 && index < 2 && this->readers_[index] != 0)
       --this->readers_[index];
   }
+  bool reclaimable(int index) const {
+    return index >= 0 && index < 2 && index != this->published_ &&
+           index != this->writing_ && this->readers_[index] == 0;
+  }
 
 protected:
   int published_{-1};

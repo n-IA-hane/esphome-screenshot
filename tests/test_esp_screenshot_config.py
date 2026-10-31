@@ -10,6 +10,19 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_on_demand_image_buffers_are_an_explicit_supported_choice(tmp_path):
+    test_screenshot_schema_and_native_api_package(
+        tmp_path, {
+            "lvgl_id": "ui", "preallocate_buffers": False,
+            "task_core": 1, "task_priority": 3, "task_stack_size": 8192,
+            "task_stack_in_psram": False, "buffer_in_psram": False,
+            "capture_id": {"id": "screenshot_id_entity", "name": "Screenshot ID"},
+            "capture_status": {"id": "screenshot_status_entity", "name": "Screenshot status"},
+        }, True
+    )
+    assert "set_preallocate_buffers(false)" in (tmp_path / "build/src/main.cpp").read_text()
+
+
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [

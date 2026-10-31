@@ -261,7 +261,7 @@ struct EspScreenshot {
  jpeg_enc_handle_t encoder_{};uint8_t quality_=85;uint32_t boot_id_{};TaskHandle_t worker_handle_{};
  uint32_t task_stack_size_=6144;int8_t task_core_=-1;uint8_t task_priority_=1;
  display::DisplayRotation rotation_=display::DISPLAY_ROTATION_0_DEGREES;
- bool task_stack_in_psram_=true,buffer_in_psram_=true,failed=false,loop_disabled=false;
+ bool task_stack_in_psram_=true,buffer_in_psram_=true,preallocate_buffers_=true,failed=false,loop_disabled=false;
  TextSensor *capture_status_sensor_{};
  void setup();void fail_setup_(const char*);void publish_status_(const std::string&);
  void publish_error_(const char*);
@@ -379,12 +379,15 @@ struct EspScreenshot {
  TextSensor *capture_id_sensor_{},*capture_status_sensor_{};
  std::atomic_bool busy_{false},requested_{false},completed_{false},stopping_{false};
  SnapshotSlots slots_{};int writing_slot_=-1;void *worker_handle_=this,*mutex_=this;
- bool failed=false,copy_available=true,encode_success_=false,loop_enabled=false;
+ bool failed=false,copy_available=true,encode_success_=false,loop_enabled=false,preallocate_buffers_=true;
  unsigned width_=8,height_=8;size_t jpeg_size_[2]{};char capture_id_[2][18]{};
  bool capture();void cancel_capture_(const char*);void loop();
  void publish_status_(const std::string&);void publish_error_(const char*);
  bool is_failed(){return failed;}
  bool copy_display_(){return copy_available;}
+ bool reserve_capture_buffers_(){return true;}
+ void release_capture_buffers_(){}
+ void reap_retired_images_(){}
  void enable_loop_soon_any_context(){loop_enabled=true;}
  void disable_loop(){loop_enabled=false;}
  int published_slot(){int index=slots_.acquire();if(index>=0)slots_.release(index);return index;}
@@ -517,9 +520,11 @@ struct EspScreenshot {
  TextSensor *capture_status_sensor_{};void *encoder_{},*mutex_=this;
  void *pixels_{},*coverage_{},*worker_stack_{},*jpeg_[2]{};
  SnapshotSlots slots_{};int writing_slot_=-1;
- std::atomic_bool busy_{false};bool failed=false;
+ std::atomic_bool busy_{false};bool failed=false,preallocate_buffers_=true;
  void fail_setup_(const char*);void cancel_capture_(const char*);
  void publish_status_(const std::string&);void publish_error_(const char*);
+ void release_capture_buffers_(){}
+ void reap_retired_images_(){}
  void mark_failed(){failed=true;}
 };
 """

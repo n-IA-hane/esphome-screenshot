@@ -28,6 +28,7 @@ CONF_TASK_PRIORITY = "task_priority"
 CONF_TASK_STACK_SIZE = "task_stack_size"
 CONF_TASK_STACK_IN_PSRAM = "task_stack_in_psram"
 CONF_BUFFER_IN_PSRAM = "buffer_in_psram"
+CONF_PREALLOCATE_BUFFERS = "preallocate_buffers"
 
 
 def _task_core(value):
@@ -75,6 +76,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_TASK_STACK_SIZE, default=6144): _stack_size,
             cv.Optional(CONF_TASK_STACK_IN_PSRAM, default=True): cv.boolean,
             cv.Optional(CONF_BUFFER_IN_PSRAM, default=True): cv.boolean,
+            cv.Optional(CONF_PREALLOCATE_BUFFERS, default=True): cv.boolean,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.has_exactly_one_key(CONF_MIPI_DSI_ID, CONF_LVGL_ID),
@@ -120,6 +122,7 @@ async def to_code(config):
     cg.add(var.set_task_stack_size(config[CONF_TASK_STACK_SIZE]))
     cg.add(var.set_task_stack_in_psram(config[CONF_TASK_STACK_IN_PSRAM]))
     cg.add(var.set_buffer_in_psram(config[CONF_BUFFER_IN_PSRAM]))
+    cg.add(var.set_preallocate_buffers(config[CONF_PREALLOCATE_BUFFERS]))
     if CONF_MIPI_DSI_ID in config:
         if CORE.data["esp32"]["variant"] != "ESP32P4":
             raise cv.Invalid("mipi_dsi_id requires ESP32-P4")

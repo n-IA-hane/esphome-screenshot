@@ -242,8 +242,9 @@ HTTP 503.
 
 ## Resource ownership
 
-The component preallocates one RGB565 snapshot, two bounded JPEG slots and a
-persistent worker during setup. The software encoder runs in mono-task mode;
+With the default `preallocate_buffers: true`, setup reserves one RGB565
+snapshot and two bounded JPEG slots. The worker, mutex and encoder workspace
+are persistent. The software encoder runs in mono-task mode;
 it does not use P4's hardware JPEG peripheral, so screenshot compression does
 not take the video codec peripheral away from a call.
 
@@ -252,7 +253,7 @@ JPEG slot until the synchronous response finishes. A later capture cannot
 reuse a slot that a reader still owns. When both slots are occupied, another
 capture returns busy instead of allocating more memory.
 
-Approximate image payload storage is:
+Approximate image payload reservation with the default preallocation is:
 
 ```text
 width * height * 2 + 2 * max_jpeg_size bytes
@@ -266,6 +267,20 @@ JPEG slots reserves 390272 bytes for image payloads,
 plus 16200 bytes for LVGL coverage. Actual heap use includes the codec and RTOS
 objects. JPEG size depends on content; an image exceeding `max_jpeg_size` fails
 without replacing the last valid screenshot.
+
+With `preallocate_buffers: false`, setup reserves the worker, mutex and encoder
+workspace without allocating raw, coverage or JPEG image buffers. Each capture
+first admits its complete temporary storage in the configured memory pool.
+Insufficient memory rejects that request while preserving the preceding capture
+ID, published JPEG and readers. Placement, resolution, quality and
+`max_jpeg_size` remain unchanged; there is no fallback to a different heap.
+
+After encoding, raw pixels and LVGL coverage are released. Published or leased
+JPEG data stays immutable; retired JPEG data is released after its final reader.
+A private writer buffer can shrink before publication, while a failed shrink
+keeps its original allocation. Peak image memory depends on the active capture
+and retained JPEGs. This policy governs screenshot storage rather than reserving
+RAM for future camera, audio or display allocations.
 
 Capture and encoding are on demand. There is no periodic capture task, no
 continuous framebuffer mirror and no encoder task created per request. The
@@ -293,6 +308,7 @@ esp_screenshot:
   task_stack_size: 6144    # Bytes, 4096 through 65536, multiple of 16
   task_stack_in_psram: true
   buffer_in_psram: true
+  preallocate_buffers: true  # false admits image buffers only when capture is requested
 ```
 
 `task_core: any` requests `tskNO_AFFINITY`; FreeRTOS can apply its normal FPU
@@ -300,8 +316,9 @@ affinity policy. A numeric value requests that core explicitly.
 
 `buffer_in_psram` controls the raw snapshot, JPEG slots and LVGL coverage map.
 It does not change allocations private to the vendor codec. Memory allocation
-uses the requested capability explicitly: an unavailable block fails setup
-with an error, rather than silently consuming another memory pool. Choosing
+uses the requested capability explicitly. An unavailable block fails setup in
+preallocated mode or rejects capture admission in on-demand mode; it never
+silently consumes another memory pool. Choosing
 internal image buffers can exhaust the memory needed by audio and display DMA.
 `dump_state()` prints an on-demand diagnostic with free and largest blocks for
 internal/DMA memory and free PSRAM, together with the configured worker
@@ -309,8 +326,8 @@ affinity, priority, stack placement and minimum free stack bytes.
 
 ## Local development and complete LVGL example
 
-Version: `2026.11.1-dev`. The four component implementation files were extracted
-without byte changes from Intercom commit `03436d6e433c6a4306f095fe4f1b01de389f0c2e`.
+Version: `2026.11.1-dev`. The initial extraction copied the four component
+implementation files without byte changes from Intercom commit `03436d6e433c6a4306f095fe4f1b01de389f0c2e`.
 The original MIT license and [source hashes](SOURCE.md) are preserved. No Home Assistant Python package is needed
 to develop or use this component.
 

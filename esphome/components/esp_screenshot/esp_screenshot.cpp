@@ -66,26 +66,28 @@ void EspScreenshot::setup() {
       MALLOC_CAP_8BIT |
       (this->task_stack_in_psram_ ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL);
   this->pixel_size_ = size_t(this->width_) * this->height_ * sizeof(uint16_t);
-  this->pixels_ = static_cast<uint8_t *>(
-      heap_caps_aligned_alloc(16, this->pixel_size_, buffer_caps));
-  for (auto &buffer : this->jpeg_)
-    buffer = static_cast<uint8_t *>(
-        heap_caps_malloc(this->jpeg_capacity_, buffer_caps));
+  if (this->preallocate_buffers_) {
+    this->pixels_ = static_cast<uint8_t *>(
+        heap_caps_aligned_alloc(16, this->pixel_size_, buffer_caps));
+    for (auto &buffer : this->jpeg_)
+      buffer = static_cast<uint8_t *>(
+          heap_caps_malloc(this->jpeg_capacity_, buffer_caps));
 #ifdef USE_ESP_SCREENSHOT_LVGL
-  if (this->lvgl_ != nullptr)
-    this->coverage_ = static_cast<uint8_t *>(
-        heap_caps_malloc((this->pixel_size_ / 2 + 7) / 8, buffer_caps));
+    if (this->lvgl_ != nullptr)
+      this->coverage_ = static_cast<uint8_t *>(
+          heap_caps_malloc((this->pixel_size_ / 2 + 7) / 8, buffer_caps));
 #endif
+  }
   this->worker_stack_ = static_cast<StackType_t *>(
       heap_caps_malloc(this->task_stack_size_, stack_caps));
   this->mutex_ = xSemaphoreCreateMutexStatic(&this->mutex_storage_);
-  if (this->pixels_ == nullptr || this->jpeg_[0] == nullptr ||
-      this->jpeg_[1] == nullptr || this->worker_stack_ == nullptr ||
-      this->mutex_ == nullptr
+  if (this->worker_stack_ == nullptr || this->mutex_ == nullptr ||
+      (this->preallocate_buffers_ &&
+       (this->pixels_ == nullptr || this->jpeg_[0] == nullptr || this->jpeg_[1] == nullptr
 #ifdef USE_ESP_SCREENSHOT_LVGL
       || (this->lvgl_ != nullptr && this->coverage_ == nullptr)
 #endif
-  ) {
+       ))) {
     ESP_LOGE(TAG,
              "Requested memory unavailable: buffers=%s stack=%s (%u bytes)",
              this->buffer_in_psram_ ? "PSRAM" : "internal",
@@ -173,7 +175,11 @@ void EspScreenshot::cancel_capture_(const char *reason) {
   ESP_LOGW(TAG, "%s; previous image retained", reason);
   xSemaphoreTake(this->mutex_, portMAX_DELAY);
   this->slots_.cancel_write();
+  if (!this->preallocate_buffers_)
+    this->reap_retired_images_();
   xSemaphoreGive(this->mutex_);
+  if (!this->preallocate_buffers_)
+    this->release_capture_buffers_();
   this->writing_slot_ = -1;
   this->busy_.store(false, std::memory_order_release);
   this->publish_error_(reason);
@@ -182,10 +188,14 @@ void EspScreenshot::cancel_capture_(const char *reason) {
 void EspScreenshot::loop() {
   if (this->requested_.exchange(false, std::memory_order_acq_rel)) {
     xSemaphoreTake(this->mutex_, portMAX_DELAY);
+    if (!this->preallocate_buffers_)
+      this->reap_retired_images_();
     this->writing_slot_ = this->slots_.begin_write();
     xSemaphoreGive(this->mutex_);
     if (this->writing_slot_ < 0) {
       this->cancel_capture_("Image readers still own the available buffer");
+    } else if (!this->preallocate_buffers_ && !this->reserve_capture_buffers_()) {
+      this->cancel_capture_("Unable to reserve screenshot image buffers; no memory fallback");
     } else if (!this->copy_display_()) {
       this->cancel_capture_("A complete display capture is unavailable");
     } else {
@@ -270,13 +280,26 @@ void EspScreenshot::worker_() {
                          this->jpeg_[index], int(this->jpeg_capacity_), &size);
     this->encode_success_ = result == JPEG_ERR_OK && size > 0 &&
                             size_t(size) <= this->jpeg_capacity_;
+    if (!this->preallocate_buffers_)
+      this->release_capture_buffers_();
     if (this->encode_success_) {
+      if (!this->preallocate_buffers_) {
+        // Only the reserved writer can reference this pointer. A failed
+        // shrink leaves that original allocation valid and unpublished.
+        const uint32_t caps = MALLOC_CAP_8BIT |
+            (this->buffer_in_psram_ ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL);
+        auto *smaller = static_cast<uint8_t *>(heap_caps_realloc(this->jpeg_[index], size_t(size), caps));
+        if (smaller != nullptr)
+          this->jpeg_[index] = smaller;
+      }
       this->jpeg_size_[index] = size_t(size);
       std::snprintf(this->capture_id_[index], sizeof(this->capture_id_[index]),
                     "%08lx-%08lx", static_cast<unsigned long>(this->boot_id_),
                     static_cast<unsigned long>(++this->sequence_));
       xSemaphoreTake(this->mutex_, portMAX_DELAY);
       this->slots_.publish(index);
+      if (!this->preallocate_buffers_)
+        this->reap_retired_images_();
       xSemaphoreGive(this->mutex_);
     }
     this->completed_.store(true, std::memory_order_release);
@@ -318,7 +341,52 @@ void EspScreenshot::handleRequest(AsyncWebServerRequest *request) {
   }
   xSemaphoreTake(this->mutex_, portMAX_DELAY);
   this->slots_.release(index);
+  if (!this->preallocate_buffers_)
+    this->reap_retired_images_();
   xSemaphoreGive(this->mutex_);
+}
+
+bool EspScreenshot::reserve_capture_buffers_() {
+  const uint32_t caps = MALLOC_CAP_8BIT |
+      (this->buffer_in_psram_ ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL);
+  size_t coverage_bytes = 0;
+#ifdef USE_ESP_SCREENSHOT_LVGL
+  if (this->lvgl_ != nullptr)
+    coverage_bytes = (this->pixel_size_ / 2 + 7) / 8;
+#endif
+  const size_t needed = this->pixel_size_ + this->jpeg_capacity_ + coverage_bytes;
+  const size_t largest = this->pixel_size_ > this->jpeg_capacity_ ? this->pixel_size_ : this->jpeg_capacity_;
+  // Admit the whole temporary working set before copying any display data.
+  // Concurrent allocation can still fail; cancel_capture_ rolls it all back.
+  if (heap_caps_get_free_size(caps) < needed || heap_caps_get_largest_free_block(caps) < largest)
+    return false;
+  this->pixels_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(16, this->pixel_size_, caps));
+  if (this->pixels_ == nullptr)
+    return false;
+  if (coverage_bytes != 0) {
+    this->coverage_ = static_cast<uint8_t *>(heap_caps_malloc(coverage_bytes, caps));
+    if (this->coverage_ == nullptr)
+      return false;
+  }
+  this->jpeg_[this->writing_slot_] = static_cast<uint8_t *>(heap_caps_malloc(this->jpeg_capacity_, caps));
+  return this->jpeg_[this->writing_slot_] != nullptr;
+}
+
+void EspScreenshot::release_capture_buffers_() {
+  heap_caps_free(this->pixels_);
+  heap_caps_free(this->coverage_);
+  this->pixels_ = nullptr;
+  this->coverage_ = nullptr;
+}
+
+void EspScreenshot::reap_retired_images_() {
+  for (int index = 0; index < 2; ++index) {
+    if (this->slots_.reclaimable(index)) {
+      heap_caps_free(this->jpeg_[index]);
+      this->jpeg_[index] = nullptr;
+      this->jpeg_size_[index] = 0;
+    }
+  }
 }
 
 void EspScreenshot::on_shutdown() {
@@ -358,6 +426,7 @@ void EspScreenshot::dump_config() {
                 this->width_, this->height_, this->quality_,
                 unsigned(this->jpeg_capacity_));
   ESP_LOGCONFIG(TAG, "  HTTP image: %s", this->url_.c_str());
+  ESP_LOGCONFIG(TAG, "  Image buffers: %s", this->preallocate_buffers_ ? "preallocated" : "on demand");
   ESP_LOGCONFIG(TAG,
                 "  Worker core=%d (-1=any), priority=%u, stack=%u bytes in %s; "
                 "buffers in %s",

@@ -1,13 +1,15 @@
 # Source provenance
 
-The four component files were copied byte for byte from
+The initial extraction at `e0ad6ed` copied the four component files byte for byte from
 [ESPHome Intercom commit `03436d6e433c6a4306f095fe4f1b01de389f0c2e`](https://github.com/n-IA-hane/esphome-intercom/tree/03436d6e433c6a4306f095fe4f1b01de389f0c2e/esphome/components/esp_screenshot).
 
 The source directory was `esphome/components/esp_screenshot/`. The same path is
 used here. This extraction changes packaging, examples and ownership of tests;
-it does not refactor the capture, HTTP publication or worker implementation.
+it did not refactor the capture, HTTP publication or worker implementation.
+The hashes below preserve that extraction witness. Subsequent development,
+including explicit image-buffer admission, is recorded separately in Git.
 
-| File | SHA256 |
+| File | SHA256 at initial extraction |
 | --- | --- |
 | `__init__.py` | `2de06c3ee47efb1ccda35ad9099526c7b9986a5945f3f7e5286cf669cb1de3e5` |
 | `esp_screenshot.cpp` | `70635be34c2709ff3bb01ebba18f136f9de474b94e04be4c5d724d52d582037f` |

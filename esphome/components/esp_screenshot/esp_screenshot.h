@@ -32,6 +32,7 @@ public:
     this->task_stack_in_psram_ = value;
   }
   void set_buffer_in_psram(bool value) { this->buffer_in_psram_ = value; }
+  void set_preallocate_buffers(bool value) { this->preallocate_buffers_ = value; }
   void set_quality(uint8_t quality) { this->quality_ = quality; }
   void set_max_jpeg_size(size_t size) { this->jpeg_capacity_ = size; }
   void set_path(const std::string &path) {
@@ -70,6 +71,9 @@ protected:
   void fail_setup_(const char *reason);
   void publish_status_(const std::string &status);
   void publish_error_(const char *reason);
+  bool reserve_capture_buffers_();
+  void release_capture_buffers_();
+  void reap_retired_images_();  // caller holds publication mutex
 #ifdef USE_ESP_SCREENSHOT_LVGL
   static void flush_event_(lv_event_t *event);
   lvgl::LvglComponent *lvgl_{nullptr};
@@ -103,6 +107,7 @@ protected:
   int8_t task_core_{-1};
   uint8_t task_priority_{1};
   bool task_stack_in_psram_{true}, buffer_in_psram_{true};
+  bool preallocate_buffers_{true};
   SemaphoreHandle_t mutex_{nullptr};
   StaticSemaphore_t mutex_storage_{};
 };
