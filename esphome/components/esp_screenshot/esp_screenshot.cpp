@@ -42,12 +42,14 @@ void EspScreenshot::setup() {
 #ifdef USE_ESP_SCREENSHOT_LVGL
   if (this->lvgl_ != nullptr && this->lvgl_->get_disp() != nullptr) {
     auto *display = this->lvgl_->get_disp();
-    if (lv_display_get_color_format(display) != LV_COLOR_FORMAT_RGB565 ||
+    const auto format = lv_display_get_color_format(display);
+    if ((format != LV_COLOR_FORMAT_RGB565 &&
+         format != LV_COLOR_FORMAT_RGB565_SWAPPED) ||
         lv_display_get_render_mode(display) != LV_DISPLAY_RENDER_MODE_PARTIAL ||
         lv_display_get_offset_x(display) != 0 ||
         lv_display_get_offset_y(display) != 0) {
-      this->fail_setup_("LVGL capture requires RGB565 partial rendering without "
-                        "display offsets");
+      this->fail_setup_("LVGL capture requires RGB565 or RGB565_SWAPPED partial "
+                        "rendering without display offsets");
       return;
     }
     this->width_ = lv_display_get_horizontal_resolution(display);
@@ -259,7 +261,9 @@ void EspScreenshot::flush_event_(lv_event_t *event) {
   if (buffer == nullptr || area == nullptr ||
       !self->assembler_.add(area->x1, area->y1, lv_area_get_width(area),
                             lv_area_get_height(area), buffer->data,
-                            buffer->header.stride))
+                            buffer->header.stride,
+                            lv_display_get_color_format(display) ==
+                                LV_COLOR_FORMAT_RGB565_SWAPPED))
     self->flush_error_ = true;
 }
 #endif

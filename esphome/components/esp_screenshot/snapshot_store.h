@@ -50,7 +50,7 @@ protected:
   unsigned readers_[2]{};
 };
 
-// Assembles a full composed LVGL refresh from temporary RGB565 rectangles.
+// Assembles a full composed LVGL refresh into RGB565 little-endian pixels.
 // Missing rectangles are rejected instead of publishing stale or black pixels.
 class FrameAssembler {
 public:
@@ -64,14 +64,23 @@ public:
     std::memset(coverage, 0, (size_t(width) * height + 7) / 8);
   }
   bool add(int x, int y, unsigned width, unsigned height, const uint8_t *pixels,
-           size_t stride) {
+           size_t stride, bool swapped = false) {
     if (pixels == nullptr || x < 0 || y < 0 || unsigned(x) > this->width_ ||
         unsigned(y) > this->height_ || width > this->width_ - unsigned(x) ||
         height > this->height_ - unsigned(y) || stride < width * 2U)
       return false;
     for (unsigned row = 0; row < height; ++row) {
       const size_t start = size_t(y + row) * this->width_ + unsigned(x);
-      std::memcpy(this->pixels_ + start * 2, pixels + row * stride, width * 2U);
+      auto *destination = this->pixels_ + start * 2;
+      const auto *source = pixels + row * stride;
+      if (swapped) {
+        for (unsigned column = 0; column < width; ++column) {
+          destination[column * 2] = source[column * 2 + 1];
+          destination[column * 2 + 1] = source[column * 2];
+        }
+      } else {
+        std::memcpy(destination, source, width * 2U);
+      }
       for (unsigned column = 0; column < width; ++column) {
         const size_t bit = start + column;
         const auto mask = uint8_t(1U << (bit & 7U));
