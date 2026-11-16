@@ -1,6 +1,7 @@
 # Optional fragment for existing ESP32-P4 ESP-IDF firmware with PSRAM, network
-# connectivity and an RGB565 mipi_dsi display whose ID is main_display.
-# The provider stays in Intercom; it is not copied into this repository.
+# connectivity and an RGB565 LVGL instance whose ID is ui.
+# The application keeps its display provider. Composed direct video needs
+# the advertised public MIPI readback capability; this fragment adds no driver.
 # This file is a package fragment, not a complete board/network configuration.
 external_components:
   - source:
@@ -9,16 +10,10 @@ external_components:
       ref: dev
       path: esphome/components
     components: [esp_screenshot]
-  - source:
-      type: git
-      url: https://github.com/n-IA-hane/esphome-intercom
-      ref: dev
-      path: esphome/components
-    components: [mipi_dsi]
 
 esp_screenshot:
   id: screen_capture
-  mipi_dsi_id: main_display
+  lvgl_id: ui
   rotation: 0
   path: screen
   quality: 85

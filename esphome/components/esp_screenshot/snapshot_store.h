@@ -55,11 +55,12 @@ protected:
 class FrameAssembler {
 public:
   void reset(uint8_t *pixels, uint8_t *coverage, unsigned width,
-             unsigned height) {
+             unsigned height, uint16_t rotation = 0) {
     this->pixels_ = pixels;
     this->coverage_ = coverage;
     this->width_ = width;
     this->height_ = height;
+    this->rotation_ = rotation;
     this->covered_ = 0;
     std::memset(coverage, 0, (size_t(width) * height + 7) / 8);
   }
@@ -73,7 +74,27 @@ public:
       const size_t start = size_t(y + row) * this->width_ + unsigned(x);
       auto *destination = this->pixels_ + start * 2;
       const auto *source = pixels + row * stride;
-      if (swapped) {
+      if (this->rotation_ != 0) {
+        const unsigned output_width = this->rotation_ == 180 ? this->width_ : this->height_;
+        for (unsigned column = 0; column < width; ++column) {
+          unsigned out_x = unsigned(x) + column, out_y = unsigned(y) + row;
+          if (this->rotation_ == 90) {
+            const auto old_x = out_x;
+            out_x = this->height_ - 1 - out_y;
+            out_y = old_x;
+          } else if (this->rotation_ == 180) {
+            out_x = this->width_ - 1 - out_x;
+            out_y = this->height_ - 1 - out_y;
+          } else {
+            const auto old_x = out_x;
+            out_x = out_y;
+            out_y = this->width_ - 1 - old_x;
+          }
+          auto *pixel = this->pixels_ + (size_t(out_y) * output_width + out_x) * 2;
+          pixel[0] = source[column * 2 + (swapped ? 1 : 0)];
+          pixel[1] = source[column * 2 + (swapped ? 0 : 1)];
+        }
+      } else if (swapped) {
         for (unsigned column = 0; column < width; ++column) {
           destination[column * 2] = source[column * 2 + 1];
           destination[column * 2 + 1] = source[column * 2];
@@ -100,6 +121,7 @@ protected:
   uint8_t *pixels_{nullptr};
   uint8_t *coverage_{nullptr};
   unsigned width_{0}, height_{0};
+  uint16_t rotation_{0};
   size_t covered_{0};
 };
 

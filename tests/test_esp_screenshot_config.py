@@ -27,9 +27,11 @@ def test_on_demand_image_buffers_are_an_explicit_supported_choice(tmp_path):
     ("settings", "expected"),
     [
         ({"lvgl_id": "ui"}, True),
+        ({"mipi_dsi_id": "screen"}, True),
         ({"lvgl_id": "ui", "rotation": 0}, True),
-        ({"lvgl_id": "ui", "rotation": 90}, False),
+        ({"lvgl_id": "ui", "rotation": 90}, True),
         ({"lvgl_id": "ui", "rotation": 45}, False),
+        ({"mipi_dsi_id": "screen", "rotation": 90}, True),
         ({}, False),
         ({"lvgl_id": "ui", "mipi_dsi_id": "screen"}, False),
         ({"lvgl_id": "ui", "max_jpeg_size": 1024}, False),
@@ -144,7 +146,9 @@ def test_mipi_screenshot_rotation_schema_and_codegen(tmp_path, rotation):
                 "components": ["esp_screenshot"],
             }
         ],
-        "display": [{"platform": "mipi_dsi", "id": "screen", "model": "WAVESHARE-P4-NANO-10.1"}],
+        "display": [{"platform": "mipi_dsi", "id": "screen", "model": "WAVESHARE-10.1-DSI-TOUCH-A",
+                     "update_interval": "never", "auto_clear_enabled": False}],
+        "lvgl": {"id": "ui", "displays": ["screen"], "rotation": 270},
         "esp_screenshot": {"id": "screen_capture", "mipi_dsi_id": "screen", "rotation": rotation},
     }
     path = tmp_path / "p4.yaml"
@@ -166,4 +170,12 @@ def test_mipi_screenshot_rotation_schema_and_codegen(tmp_path, rotation):
         )
         assert generated.returncode == 0, generated.stdout + generated.stderr
         main = (tmp_path / "build/src/main.cpp").read_text()
-        assert f"screen_capture->set_rotation(display::DISPLAY_ROTATION_{rotation}_DEGREES)" in main
+        # Legacy rotation 0 stays logical/upright; 90 remains an extra 90,
+        # independently of the LVGL owner's 270-degree display orientation.
+        assert (
+            f"screen_capture->set_rotation(display::DISPLAY_ROTATION_{rotation}_DEGREES)"
+            in main
+        )
+        assert "screen_capture->set_lvgl(ui)" in main
+        assert "ui->set_rotation(display::DISPLAY_ROTATION_270_DEGREES)" in main
+        assert "set_mipi_display" not in main

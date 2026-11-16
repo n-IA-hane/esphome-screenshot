@@ -5,57 +5,50 @@ It is an optional ESPHome component. It works independently of VoIP Stack and
 requires ESP-IDF and network connectivity. The default memory placement requires
 PSRAM; internal placement can be chosen explicitly for sufficiently small captures.
 Build with ESPHome 2026.10.0 or newer and Python 3.12 or newer.
-The LVGL backend uses official ESPHome display/LVGL components. Home Assistant,
-VoIP Stack, Audio Stack and Intercom are not required for LVGL capture or HTTP
-image access. The optional P4 framebuffer provider is described separately below.
+The screenshot uses public display-owner APIs: a complete LVGL refresh, or
+coherent driver-owned framebuffer readback when the display advertises it.
+Home Assistant, VoIP Stack, Audio Stack and Intercom are not required. The
+optional MIPI backend is compiled only for a configured readback-capable display;
+it never obtains a live framebuffer pointer or accesses private driver fields.
 
-## Choose the capture backend
+## Capture the visible composition
 
-| Backend | Configuration | Captured content |
-| --- | --- | --- |
-| P4 MIPI DSI framebuffer | `mipi_dsi_id` | Completed display pixels, including video drawn directly to the display |
-| LVGL composed refresh | `lvgl_id` | All LVGL layers sent during a complete refresh |
+Configure `lvgl_id` with the existing LVGL component ID. Normally capture includes
+the normal, top and system layers and any video presented as an LVGL image.
+When that owner's display advertises public RGB565 framebuffer readback, the
+component selects it automatically. This captures the last driver-owned
+composition, including video drawn directly through that same display owner.
+It does not request an LVGL redraw, which could repaint over the visible video.
+The driver locks and copies its composed image; a busy or failed readback
+preserves the preceding JPEG and its identifier.
 
-Choose exactly one backend. The P4 backend uses the maintained Intercom
-`mipi_dsi` provider because official ESPHome does not expose the synchronized
-framebuffer copy API. The adaptation is compiled only when screenshots are
-included. The copy takes the same mutex as panel DMA submissions and returns
-busy immediately when a transfer owns the framebuffer. It exports RGB565 in
-the display driver's logical orientation, including its rotation and byte order
-conversion. An optional `rotation` applies an additional clockwise rotation to
-the screenshot only, with values `0` (default), `90`, `180` or `270`.
-RGB888 framebuffer capture is currently unsupported. This backend reads the
-driver framebuffer, rather than the physical panel controller.
+The normal LVGL backend supports RGB565 and RGB565_SWAPPED partial rendering
+without display offsets and checks complete pixel coverage before encoding.
+A paused LVGL instance must be resumed for this refresh-based path. Coherent
+readback can copy the last displayed composition while LVGL is paused. Official
+Display has no general framebuffer readback API, so a display without the
+advertised capability uses the normal LVGL path and cannot include producers
+drawing outside LVGL. Physical panel delivery is qualified separately.
 
-The synchronized provider contract is the public method
-`mipi_dsi::MipiDsi::copy_frame_buffer_rgb565(uint8_t *, size_t, display::DisplayRotation)`.
-It remains in Intercom's `mipi_dsi` driver, guarded by `USE_ESP_SCREENSHOT`; this
-repository neither copies nor refactors that driver. Upstream ESPHome's driver
-without that method cannot link the `mipi_dsi_id` backend. The optional example
-[examples/p4-mipi-dsi.yaml](examples/p4-mipi-dsi.yaml) selects that provider explicitly.
+Optional `rotation: 0`, `90`, `180` or `270` rotates only the output JPEG. It
+uses the existing capture buffer and does not alter the panel, touch or video.
+The default follows the display owner's logical orientation.
 
-The LVGL backend uses public display events without replacing the display's
-flush callback or forking its driver. It captures a complete refresh, including
-the top and system layers. It supports RGB565 partial rendering without display
-offsets. It checks pixel coverage before encoding: missing rectangles fail the
-capture rather than producing an image containing stale pixels. A paused LVGL
-display must be resumed before capture. Its image represents the pixels
-submitted through LVGL; investigate display-driver errors separately when
-checking whether the physical panel received every transfer.
+### Existing P4 configurations
 
-Use the framebuffer backend when anything draws outside LVGL. The LVGL backend
-cannot capture independent direct-to-panel video or another writer's pixels.
-Some SPI displays keep their only complete framebuffer inside the panel itself;
-the component does not claim readback support for those panels.
+`mipi_dsi_id` is accepted as a deprecated display selector. It uses public
+readback when advertised, otherwise it requires that display's unique LVGL
+owner. It retains the old output rotation unchanged. For example, with the
+display's logical rotation 270, screenshot
+rotation 0 follows the logical landscape screen; screenshot rotation 90
+adds a quarter turn to that image. Neither selector adds the owner's rotation
+again. Prefer `lvgl_id` in new configurations. If one LVGL owner has multiple
+readback-capable displays, use `mipi_dsi_id` to select the intended display.
 
-LVGL's software rotation is independent of the display driver's rotation. A
-portrait MIPI framebuffer can therefore contain a landscape GUI sideways even
-when the display driver reports rotation `0`. For example, the maintained P4
-FULL landscape UI uses `lvgl.rotation: 270` on an 800x1280 native framebuffer;
-set screenshot `rotation: 90` to obtain an upright 1280x800 JPEG from that MIPI
-backend. This does not change the panel, touch, video or LVGL configuration.
-The LVGL capture backend already follows LVGL's logical coordinates and rejects
-an additional nonzero screenshot rotation.
+A display without either public readback or a unique LVGL owner receives a
+configuration error instead of a compile failure from a missing private method.
+Readback uses only `copy_frame_buffer_rgb565`, never a panel handle or a live
+framebuffer getter.
 
 ## Add to an existing firmware
 
@@ -91,7 +84,8 @@ button:
           id: screen_capture
 ```
 
-For P4, select the maintained MIPI DSI display instead:
+On P4, select the existing LVGL instance that owns the display. A display
+advertising coherent readback selects that backend without another mode option:
 
 ```yaml
 external_components:
@@ -101,17 +95,11 @@ external_components:
       ref: dev
       path: esphome/components
     components: [esp_screenshot]
-  - source:
-      type: git
-      url: https://github.com/n-IA-hane/esphome-intercom
-      ref: dev
-      path: esphome/components
-    components: [mipi_dsi]
 
 esp_screenshot:
   id: screen_capture
-  mipi_dsi_id: main_display  # ID of your existing RGB565 MIPI DSI display
-  rotation: 0  # Additional clockwise image rotation; use 90 for P4 FULL landscape
+  lvgl_id: ui  # ID of your existing LVGL component
+  rotation: 0
   path: screen
   quality: 85
   max_jpeg_size: 262144
@@ -120,6 +108,12 @@ esp_screenshot:
   capture_status:
     name: Screenshot status
 ```
+
+The current coordinated P4 configuration explicitly loads the minimal
+upstream-aligned MIPI provider with this public copy capability. It includes
+UI drawing and directly committed renderer video in the same composed frame.
+Screenshot capture does not select a display fork, request a redraw, or create
+another display owner. Ordinary S3 LVGL capture uses the existing refresh path.
 
 Keep the same `button` block from the S3 example. Alternatively, include
 `packages/screenshot.yaml`, which exposes **Take screenshot** and
@@ -139,7 +133,7 @@ followed by the failure reason. Errors are also reported in the ESPHome log.
 
 The **Take screenshot** button and the two sensors appear through the existing
 ESPHome integration. Use Home Assistant's built-in **Template Image** helper
-to display the JPEG. This works with both backends and leaves the device's
+to display the JPEG. This uses the composed capture and leaves the device's
 camera available for its normal purpose. No custom Home Assistant integration
 or separate image server is required.
 
@@ -298,10 +292,12 @@ LVGL backend requests a full refresh and copies its rectangles in the main
 loop; this can briefly delay UI work. Exclude that requested-capture window
 from continuous timing baselines. JPEG compression runs in the worker.
 
-MIPI image rotation is part of the existing synchronized RGB565 copy. It uses
+Output rotation is part of assembling LVGL's RGB565 rectangles. It uses
 the same snapshot buffer and one pixel pass; 90 and 270 degrees swap the JPEG
-width and height. It does not enable the encoder's rotation option, which does
-not support this RGB565 input format.
+width and height. With driver readback, the same additional rotation is passed
+to the owner's copy API, without applying the panel rotation a second time.
+Neither path enables the encoder's rotation option, which does not support
+this RGB565 input format.
 
 ## Optional execution and memory tuning
 

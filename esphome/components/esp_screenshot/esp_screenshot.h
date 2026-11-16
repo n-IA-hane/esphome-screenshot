@@ -5,11 +5,11 @@
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "snapshot_store.h"
-#ifdef USE_ESP_SCREENSHOT_MIPI_DSI
-#include "esphome/components/mipi_dsi/mipi_dsi.h"
-#endif
 #ifdef USE_ESP_SCREENSHOT_LVGL
 #include "esphome/components/lvgl/lvgl_esphome.h"
+#endif
+#ifdef USE_ESP_SCREENSHOT_MIPI
+#include "esphome/components/mipi_dsi/mipi_dsi.h"
 #endif
 #include "esp_jpeg_enc.h"
 #include "freertos/FreeRTOS.h"
@@ -44,14 +44,12 @@ public:
   void set_capture_status_sensor(text_sensor::TextSensor *sensor) {
     this->capture_status_sensor_ = sensor;
   }
-#ifdef USE_ESP_SCREENSHOT_MIPI_DSI
-  void set_mipi_display(mipi_dsi::MipiDsi *display) {
-    this->mipi_display_ = display;
-  }
-  void set_rotation(display::DisplayRotation rotation) { this->rotation_ = rotation; }
-#endif
+  void set_rotation(uint16_t rotation) { this->rotation_ = rotation; }
 #ifdef USE_ESP_SCREENSHOT_LVGL
   void set_lvgl(lvgl::LvglComponent *display) { this->lvgl_ = display; }
+#endif
+#ifdef USE_ESP_SCREENSHOT_MIPI
+  void set_mipi_display(mipi_dsi::MipiDsi *display) { this->mipi_display_ = display; }
 #endif
   float get_setup_priority() const override { return setup_priority::LATE; }
   void setup() override;
@@ -80,10 +78,10 @@ protected:
   FrameAssembler assembler_{};
   bool flush_error_{false};
 #endif
-#ifdef USE_ESP_SCREENSHOT_MIPI_DSI
+#ifdef USE_ESP_SCREENSHOT_MIPI
   mipi_dsi::MipiDsi *mipi_display_{nullptr};
-  display::DisplayRotation rotation_{display::DISPLAY_ROTATION_0_DEGREES};
 #endif
+  uint16_t rotation_{0};
   web_server_base::WebServerBase *web_server_{nullptr};
   text_sensor::TextSensor *capture_id_sensor_{nullptr};
   text_sensor::TextSensor *capture_status_sensor_{nullptr};

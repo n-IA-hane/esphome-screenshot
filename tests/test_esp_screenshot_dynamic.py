@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import pytest
 
+from screenshot_lvgl_fixture import LVGL
+
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = ROOT / "esphome/components/esp_screenshot"
@@ -98,9 +100,10 @@ template<typename...Ts>struct Action{virtual ~Action()=default;virtual void play
 namespace text_sensor {struct TextSensor{std::string state;std::vector<std::string> history;void publish_state(const std::string&s){state=s;history.push_back(s);}};}
 namespace display {enum DisplayRotation{DISPLAY_ROTATION_0_DEGREES=0,DISPLAY_ROTATION_90_DEGREES=90,DISPLAY_ROTATION_180_DEGREES=180,DISPLAY_ROTATION_270_DEGREES=270};}
 namespace mipi_dsi {struct MipiDsi {
- bool copyable=true;unsigned copies=0;
- unsigned get_width(){return 8;}unsigned get_height(){return 8;}
- bool copy_frame_buffer_rgb565(uint8_t *out,size_t bytes,display::DisplayRotation){++copies;if(!copyable)return false;std::memset(out,0x55,bytes);return true;}
+ bool copyable=true;unsigned copies=0,width=8,height=8;
+ std::function<bool(uint8_t*,size_t,display::DisplayRotation)> readback;
+ unsigned get_width(){return width;}unsigned get_height(){return height;}
+ bool copy_frame_buffer_rgb565(uint8_t *out,size_t bytes,display::DisplayRotation rotation){++copies;if(!copyable)return false;if(readback)return readback(out,bytes,rotation);std::memset(out,0x55,bytes);return true;}
 };}
 }
 struct AsyncWebServerResponse {
@@ -138,9 +141,9 @@ struct Probe:EspScreenshot {
  void encode(){unsigned wake=0;platform::wake=[&](){if(++wake>1)stopping_=true;};worker_();stopping_=false;platform::wake={};loop();}
 };
 int main(){
- esphome::mipi_dsi::MipiDsi display;esphome::web_server_base::WebServerBase server;
+ esphome::lvgl::LvglComponent display;display.display.width=8;display.display.height=8;esphome::web_server_base::WebServerBase server;
  esphome::text_sensor::TextSensor status,id;
- Probe p;p.set_mipi_display(&display);p.set_web_server(&server);p.set_max_jpeg_size(4096);
+ Probe p;p.set_lvgl(&display);p.set_web_server(&server);p.set_max_jpeg_size(4096);
  p.set_preallocate_buffers(false);p.set_capture_status_sensor(&status);p.set_capture_id_sensor(&id);p.setup();
  assert(!p.is_failed()&&platform::allocations.size()==1&&platform::bytes()==6144);
  assert(!p.pixels_&&!p.coverage_&&!p.jpeg_[0]&&!p.jpeg_[1]);
@@ -174,12 +177,12 @@ int main(){
  platform::fail_shrink=false;
  for(unsigned i=0;i<20;i++){assert(p.capture());p.loop();p.encode();assert(platform::bytes()==6194);}
  // The explicit realloc-failure fallback may retain one max-capacity image.
- assert(platform::allocations.size()==2&&platform::peak<=6144+128+2*4096);
+ assert(platform::allocations.size()==2&&platform::peak<=6144+128+8+2*4096);
  p.fail_setup_("host worker finished");assert(platform::allocations.empty());
 
  // The existing default still reserves raw and both max-sized JPEG slots.
- Probe fixed;fixed.set_mipi_display(&display);fixed.set_web_server(&server);fixed.set_max_jpeg_size(4096);fixed.setup();
- assert(platform::allocations.size()==4&&platform::bytes()==6144+128+2*4096);
+ Probe fixed;fixed.set_lvgl(&display);fixed.set_web_server(&server);fixed.set_max_jpeg_size(4096);fixed.setup();
+ assert(platform::allocations.size()==5&&platform::bytes()==6144+128+8+2*4096);
  fixed.fail_setup_("host worker finished");assert(platform::allocations.empty());
 }
 '''
@@ -188,10 +191,10 @@ int main(){
 @pytest.mark.parametrize("mutation", [None, "keep_raw", "retain_capacity", "ignore_reader"],
                          ids=["production", "reject-retained-raw", "reject-unshrunk-jpeg", "reject-reader-reaping"])
 def test_complete_component_dynamic_admission_and_reader_ownership(tmp_path, mutation):
-    (tmp_path / "platform.h").write_text(PLATFORM)
+    (tmp_path / "platform.h").write_text(PLATFORM + LVGL)
     headers = ["esphome/components/text_sensor/text_sensor.h", "esphome/components/web_server_base/web_server_base.h",
                "esphome/core/automation.h", "esphome/core/component.h", "esphome/core/hal.h", "esphome/core/log.h",
-               "esphome/components/mipi_dsi/mipi_dsi.h", "esp_heap_caps.h", "esp_random.h", "esp_jpeg_enc.h",
+               "esphome/components/lvgl/lvgl_esphome.h", "esp_heap_caps.h", "esp_random.h", "esp_jpeg_enc.h",
                "freertos/FreeRTOS.h", "freertos/semphr.h", "freertos/task.h"]
     for name in headers:
         path = tmp_path / name
@@ -219,7 +222,7 @@ def test_complete_component_dynamic_admission_and_reader_ownership(tmp_path, mut
         (component / name).write_text(text)
     binary = tmp_path / "dynamic"
     subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-pthread",
-                    "-fsanitize=address,undefined", "-fno-pie", "-no-pie", "-DUSE_ESP_SCREENSHOT_MIPI_DSI",
+                    "-fsanitize=address,undefined", "-fno-pie", "-no-pie", "-DUSE_ESP_SCREENSHOT_LVGL",
                     "-I", str(tmp_path), "-I", str(component), str(source), str(component / "esp_screenshot.cpp"),
                     "-o", str(binary)], capture_output=True, text=True, check=True)
     result = subprocess.run([str(binary)], capture_output=True, text=True)

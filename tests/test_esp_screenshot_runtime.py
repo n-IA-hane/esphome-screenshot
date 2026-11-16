@@ -96,12 +96,11 @@ def test_http_errors_survive_the_native_wrapper_status_mapping(tmp_path):
     native = (
         Path(esphome.__file__).parent / "components/web_server_idf/web_server_idf.cpp"
     )
-    wrapper = (
-        native.read_text()
-        .split("void AsyncWebServerRequest::init_response_(", 1)[1]
-        .split("\n#ifdef USE_WEBSERVER_AUTH", 1)[0]
-    )
-    wrapper = "void AsyncWebServerRequest::init_response_(" + wrapper
+    contents = native.read_text()
+    start = contents.index("void AsyncWebServerRequest::init_response_(")
+    # Capture this complete method only; authentication guards no longer
+    # immediately follow it on newer official cores.
+    wrapper = contents[start:].split("\n}\n", 1)[0] + "\n}\n"
     source = (HEADERS / "esp_screenshot.cpp").read_text()
     helper = source.split("static void send_http_status(", 1)[1].split(
         "\nvoid EspScreenshot::setup()", 1
@@ -117,6 +116,7 @@ def test_http_errors_survive_the_native_wrapper_status_mapping(tmp_path):
 #define HTTPD_204 "204 No Content"
 #define HTTPD_400 "400 Bad Request"
 #define HTTPD_401 "401 Unauthorized"
+#define HTTPD_403 "403 Forbidden"
 #define HTTPD_404 "404 Not Found"
 #define HTTPD_409 "409 Conflict"
 #define HTTPD_422 "422 Unprocessable Entity"
@@ -128,6 +128,7 @@ void httpd_resp_set_hdr(httpd_req_t*,const char*,const char*){}
 struct Header{const char *name,*value;};
 struct DefaultHeaders {
  std::vector<Header> headers_;
+ template<typename T> void apply_(T&) {}
  static DefaultHeaders &Instance(){static DefaultHeaders h;return h;}
 };
 struct AsyncWebServerResponse {std::string content;};
@@ -199,7 +200,7 @@ def test_setup_honors_explicit_memory_and_worker_parameters_without_fallback(tmp
 #include <string>
 #include <unordered_map>
 #include <utility>
-#define USE_ESP_SCREENSHOT_MIPI_DSI
+#define USE_ESP_SCREENSHOT_LVGL
 constexpr int MALLOC_CAP_8BIT=1,MALLOC_CAP_INTERNAL=2,MALLOC_CAP_SPIRAM=4;
 constexpr int JPEG_PIXEL_FORMAT_RGB565_LE=1,JPEG_SUBSAMPLE_444=1,JPEG_ERR_OK=0;
 constexpr int tskNO_AFFINITY=0x7fffffff;
@@ -246,16 +247,24 @@ enum DisplayRotation{DISPLAY_ROTATION_0_DEGREES=0,DISPLAY_ROTATION_90_DEGREES=90
 }
 struct Display{
  int rotation=0;
+ Display *get_disp(){return this;}
  int get_width(){return rotation==90||rotation==270?4:8;}
  int get_height(){return rotation==90||rotation==270?8:4;}
 };
+constexpr int LV_COLOR_FORMAT_RGB565=1,LV_COLOR_FORMAT_RGB565_SWAPPED=2;
+constexpr int LV_DISPLAY_RENDER_MODE_PARTIAL=1;
+int lv_display_get_color_format(Display*){return LV_COLOR_FORMAT_RGB565;}
+int lv_display_get_render_mode(Display*){return LV_DISPLAY_RENDER_MODE_PARTIAL;}
+int lv_display_get_offset_x(Display*){return 0;}int lv_display_get_offset_y(Display*){return 0;}
+int lv_display_get_horizontal_resolution(Display*d){return d->get_width();}
+int lv_display_get_vertical_resolution(Display*d){return d->get_height();}
 struct Server{void add_handler(void*){}void init(){}};
 struct TextSensor {
  std::string state;
  void publish_state(const std::string &value){state=value;}
 };
 struct EspScreenshot {
- Display *mipi_display_{};Server *web_server_{};unsigned width_{},height_{};
+ Display *lvgl_{};Server *web_server_{};unsigned width_{},height_{};
  size_t pixel_size_{},jpeg_capacity_=4096;uint8_t *pixels_{},*coverage_{},*jpeg_[2]{};
  StackType_t *worker_stack_{};StaticTask_t worker_tcb_{};StaticSemaphore_t mutex_storage_{};void *mutex_{};
  jpeg_enc_handle_t encoder_{};uint8_t quality_=85;uint32_t boot_id_{};TaskHandle_t worker_handle_{};
@@ -274,18 +283,18 @@ struct EspScreenshot {
 int main(){
  Display display;Server server;
  for(bool external:{false,true}){
-  EspScreenshot component;component.mipi_display_=&display;component.web_server_=&server;
+  EspScreenshot component;component.lvgl_=&display;component.web_server_=&server;
   component.task_core_=1;component.task_priority_=3;component.task_stack_size_=8192;
   component.task_stack_in_psram_=external;component.buffer_in_psram_=external;
   expected_core=1;expected_priority=3;expected_stack_bytes=8192;
   expected_stack_caps=MALLOC_CAP_8BIT|(external?MALLOC_CAP_SPIRAM:MALLOC_CAP_INTERNAL);
   component.setup();assert(!component.failed&&component.loop_disabled);
-  assert(allocations.size()==4);
+  assert(allocations.size()==5);
   for(const auto &entry:allocations)assert(entry.second==expected_stack_caps);
   component.fail_setup_("test fixture has no real worker");assert(allocations.empty());
  }
  TextSensor status;
- EspScreenshot default_core;default_core.mipi_display_=&display;default_core.web_server_=&server;
+ EspScreenshot default_core;default_core.lvgl_=&display;default_core.web_server_=&server;
  default_core.capture_status_sensor_=&status;
  expected_core=tskNO_AFFINITY;expected_priority=1;expected_stack_bytes=6144;
  expected_stack_caps=MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM;
@@ -293,7 +302,7 @@ int main(){
  default_core.fail_setup_("test fixture has no real worker");assert(allocations.empty());
  for(int driver:{0,90,180,270})for(int output:{0,90,180,270}){
   display.rotation=driver;
-  EspScreenshot component;component.mipi_display_=&display;component.web_server_=&server;
+  EspScreenshot component;component.lvgl_=&display;component.web_server_=&server;
   component.rotation_=static_cast<display::DisplayRotation>(output);component.setup();
   const bool swapped=((driver/90)%2)!=((output/90)%2);
   const unsigned width=swapped?4:8,height=swapped?8:4;
@@ -306,8 +315,8 @@ int main(){
  EspScreenshot invalid_core;invalid_core.task_core_=2;invalid_core.capture_status_sensor_=&status;
  invalid_core.setup();assert(invalid_core.failed&&allocations.empty()&&task_creations==before);
  assert(status.state=="Error: Requested worker core is unavailable");
- for(int failure=1;failure<=4;failure++){
-  EspScreenshot component;component.mipi_display_=&display;component.web_server_=&server;
+ for(int failure=1;failure<=5;failure++){
+  EspScreenshot component;component.lvgl_=&display;component.web_server_=&server;
   component.capture_status_sensor_=&status;
   allocation_count=0;fail_allocation=failure;
   component.setup();assert(component.failed&&component.worker_handle_==nullptr);
@@ -315,7 +324,7 @@ int main(){
   assert(status.state=="Error: Unable to preallocate screenshot resources; no memory fallback");
  }
  fail_allocation=0;encoder_error=true;
- EspScreenshot failed;failed.mipi_display_=&display;failed.web_server_=&server;
+ EspScreenshot failed;failed.lvgl_=&display;failed.web_server_=&server;
  failed.capture_status_sensor_=&status;
  failed.setup();assert(failed.failed&&allocations.empty()&&task_creations==before);
  assert(status.state=="Error: Unable to initialize the software JPEG encoder");
@@ -579,3 +588,42 @@ int main(){
     assert compiled.returncode == 0, compiled.stderr
     result = subprocess.run([str(binary)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("rotation,expected", [
+    (0, [1, 2, 3, 4, 5, 6]),
+    (90, [5, 3, 1, 6, 4, 2]),
+    (180, [6, 5, 4, 3, 2, 1]),
+    (270, [2, 4, 6, 1, 3, 5]),
+])
+def test_rotated_screenshot_preserves_pixels_across_padded_flushes(tmp_path, rotation, expected):
+    source = tmp_path / "rotation.cpp"
+    source.write_text(r'''
+#include "snapshot_store.h"
+#include <array>
+#include <cassert>
+using namespace esphome::esp_screenshot;
+int main() {
+  std::array<uint8_t, 12> output{};
+  std::array<uint8_t, 1> coverage{};
+  const uint8_t input[]{1,0,2,0,99,99,99,99,
+                        3,0,4,0,99,99,99,99,
+                        5,0,6,0,99,99,99,99};
+  FrameAssembler frame;
+  frame.reset(output.data(), coverage.data(), 2, 3, ROTATION);
+  assert(frame.add(0, 0, 2, 1, input, 8));
+  assert(!frame.complete());
+  assert(frame.add(0, 1, 2, 2, input+8, 8));
+  assert(frame.complete());
+  const uint8_t expected[]{EXPECTED};
+  for(unsigned i=0;i<6;++i) {
+    assert(output[i*2]==expected[i]);
+    assert(output[i*2+1]==0);
+  }
+}
+'''.replace("ROTATION", str(rotation)).replace("EXPECTED", ",".join(map(str, expected))))
+    binary = tmp_path / "rotation"
+    subprocess.run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                    "-I", str(HEADERS), str(source), "-o", str(binary)], check=True,
+                   capture_output=True, text=True)
+    subprocess.run([str(binary)], check=True, capture_output=True, text=True)

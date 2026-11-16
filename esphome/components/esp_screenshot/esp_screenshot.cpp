@@ -30,17 +30,15 @@ void EspScreenshot::setup() {
     this->fail_setup_("Requested worker core is unavailable");
     return;
   }
-#ifdef USE_ESP_SCREENSHOT_MIPI_DSI
+
+#ifdef USE_ESP_SCREENSHOT_MIPI
   if (this->mipi_display_ != nullptr) {
     this->width_ = this->mipi_display_->get_width();
     this->height_ = this->mipi_display_->get_height();
-    if (this->rotation_ == display::DISPLAY_ROTATION_90_DEGREES ||
-        this->rotation_ == display::DISPLAY_ROTATION_270_DEGREES)
-      std::swap(this->width_, this->height_);
   }
 #endif
 #ifdef USE_ESP_SCREENSHOT_LVGL
-  if (this->lvgl_ != nullptr && this->lvgl_->get_disp() != nullptr) {
+  if (this->width_ == 0 && this->lvgl_ != nullptr && this->lvgl_->get_disp() != nullptr) {
     auto *display = this->lvgl_->get_disp();
     const auto format = lv_display_get_color_format(display);
     if ((format != LV_COLOR_FORMAT_RGB565 &&
@@ -56,6 +54,8 @@ void EspScreenshot::setup() {
     this->height_ = lv_display_get_vertical_resolution(display);
   }
 #endif
+  if (this->rotation_ == 90 || this->rotation_ == 270)
+    std::swap(this->width_, this->height_);
   if (this->width_ == 0 || this->height_ == 0 || this->width_ > 4096 ||
       this->height_ > 4096) {
     this->fail_setup_("Display dimensions are unavailable or exceed 4096 pixels");
@@ -222,22 +222,31 @@ void EspScreenshot::loop() {
 }
 
 bool EspScreenshot::copy_display_() {
-#ifdef USE_ESP_SCREENSHOT_MIPI_DSI
-  if (this->mipi_display_ != nullptr)
-    return this->mipi_display_->copy_frame_buffer_rgb565(this->pixels_,
-                                                         this->pixel_size_, this->rotation_);
+#ifdef USE_ESP_SCREENSHOT_MIPI
+  if (this->mipi_display_ != nullptr) {
+    const bool quarter_turn = this->rotation_ == 90 || this->rotation_ == 270;
+    if (this->mipi_display_->get_width() != (quarter_turn ? this->height_ : this->width_) ||
+        this->mipi_display_->get_height() != (quarter_turn ? this->width_ : this->height_))
+      return false;
+    // Copy the last composed driver frame, including direct video. Requesting
+    // an LVGL refresh here would repaint over that composition before capture.
+    return this->mipi_display_->copy_frame_buffer_rgb565(
+        this->pixels_, this->pixel_size_, static_cast<display::DisplayRotation>(this->rotation_));
+  }
 #endif
 #ifdef USE_ESP_SCREENSHOT_LVGL
   if (this->lvgl_ != nullptr) {
     if (this->lvgl_->is_paused())
       return false;
     auto *display = this->lvgl_->get_disp();
-    if (unsigned(lv_display_get_horizontal_resolution(display)) !=
-            this->width_ ||
-        unsigned(lv_display_get_vertical_resolution(display)) != this->height_)
+    const unsigned input_width = lv_display_get_horizontal_resolution(display);
+    const unsigned input_height = lv_display_get_vertical_resolution(display);
+    const bool quarter_turn = this->rotation_ == 90 || this->rotation_ == 270;
+    if (input_width != (quarter_turn ? this->height_ : this->width_) ||
+        input_height != (quarter_turn ? this->width_ : this->height_))
       return false;
-    this->assembler_.reset(this->pixels_, this->coverage_, this->width_,
-                           this->height_);
+    this->assembler_.reset(this->pixels_, this->coverage_, input_width,
+                           input_height, this->rotation_);
     this->flush_error_ = false;
     const auto event_count = lv_display_get_event_count(display);
     lv_display_add_event_cb(display, flush_event_, LV_EVENT_FLUSH_START, this);

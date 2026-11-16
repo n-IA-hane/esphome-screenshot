@@ -6,7 +6,6 @@ import esphome.config_validation as cv
 from esphome.components import display as display_component, text_sensor, web_server_base
 from esphome.components.esp32 import add_idf_component, add_idf_sdkconfig_option
 from esphome.components.lvgl.lvcode import LvglComponent
-from esphome.components.mipi_dsi import display as mipi_dsi_display
 from esphome.const import CONF_ID, CONF_ROTATION
 from esphome.core import CORE
 from esphome.final_validate import full_config
@@ -29,6 +28,7 @@ CONF_TASK_STACK_SIZE = "task_stack_size"
 CONF_TASK_STACK_IN_PSRAM = "task_stack_in_psram"
 CONF_BUFFER_IN_PSRAM = "buffer_in_psram"
 CONF_PREALLOCATE_BUFFERS = "preallocate_buffers"
+CONF_FRAMEBUFFER_DISPLAY_ID = "_framebuffer_display_id"
 
 
 def _task_core(value):
@@ -57,7 +57,8 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(web_server_base.CONF_WEB_SERVER_BASE_ID): cv.use_id(
                 web_server_base.WebServerBase
             ),
-            cv.Optional(CONF_MIPI_DSI_ID): cv.use_id(mipi_dsi_display.MipiDsi),
+            # Legacy selector, preferring the driver's public readback capability.
+            cv.Optional(CONF_MIPI_DSI_ID): cv.use_id(display_component.Display),
             cv.Optional(CONF_LVGL_ID): cv.use_id(LvglComponent),
             cv.Optional(CONF_ROTATION, default=0): display_component.validate_rotation,
             cv.Optional(CONF_CAPTURE_ID): text_sensor.text_sensor_schema(
@@ -87,8 +88,38 @@ CONFIG_SCHEMA = cv.All(
 def _validate_paths(config):
     full = full_config.get()
     instances = full.get("esp_screenshot", [])
-    if CONF_LVGL_ID in config and config[CONF_ROTATION] != 0:
-        raise cv.Invalid("rotation applies only to mipi_dsi_id; LVGL capture already uses its logical orientation")
+    readback_ids = {
+        str(id_)
+        for id_ in CORE.data.get("mipi_dsi", {}).get("framebuffer_readback_ids", [])
+    }
+    if CONF_MIPI_DSI_ID in config:
+        target = config.pop(CONF_MIPI_DSI_ID)
+        if str(target) in readback_ids:
+            config[CONF_FRAMEBUFFER_DISPLAY_ID] = target
+        else:
+            owners = [
+                item for item in full.get("lvgl", [])
+                if any(str(target) == str(id_) for id_ in item.get("displays", []))
+            ]
+            if len(owners) != 1:
+                raise cv.Invalid(
+                    "mipi_dsi_id requires public RGB565 framebuffer readback or "
+                    "the display's unique LVGL owner"
+                )
+            config[CONF_LVGL_ID] = owners[0][CONF_ID]
+    elif CONF_LVGL_ID in config:
+        owners = [item for item in full.get("lvgl", [])
+                  if str(item[CONF_ID]) == str(config[CONF_LVGL_ID])]
+        targets = [id_ for owner in owners for id_ in owner.get("displays", [])
+                   if str(id_) in readback_ids]
+        if len(targets) > 1:
+            raise cv.Invalid(
+                "This LVGL owner has multiple readback displays; select one with mipi_dsi_id"
+            )
+        if targets:
+            config[CONF_FRAMEBUFFER_DISPLAY_ID] = targets[0]
+    # Both backends supply logical pixels. The requested output rotation is
+    # additional; never add the LVGL or display owner's rotation here.
     if (
         config[CONF_TASK_STACK_IN_PSRAM] or config[CONF_BUFFER_IN_PSRAM]
     ) and "psram" not in full:
@@ -123,17 +154,15 @@ async def to_code(config):
     cg.add(var.set_task_stack_in_psram(config[CONF_TASK_STACK_IN_PSRAM]))
     cg.add(var.set_buffer_in_psram(config[CONF_BUFFER_IN_PSRAM]))
     cg.add(var.set_preallocate_buffers(config[CONF_PREALLOCATE_BUFFERS]))
-    if CONF_MIPI_DSI_ID in config:
-        if CORE.data["esp32"]["variant"] != "ESP32P4":
-            raise cv.Invalid("mipi_dsi_id requires ESP32-P4")
-        display = await cg.get_variable(config[CONF_MIPI_DSI_ID])
+    if CONF_FRAMEBUFFER_DISPLAY_ID in config:
+        display = await cg.get_variable(config[CONF_FRAMEBUFFER_DISPLAY_ID])
         cg.add(var.set_mipi_display(display))
-        cg.add(var.set_rotation(display_component.DISPLAY_ROTATIONS[config[CONF_ROTATION]]))
-        cg.add_define("USE_ESP_SCREENSHOT_MIPI_DSI")
+        cg.add_define("USE_ESP_SCREENSHOT_MIPI")
     else:
         display = await cg.get_variable(config[CONF_LVGL_ID])
         cg.add(var.set_lvgl(display))
         cg.add_define("USE_ESP_SCREENSHOT_LVGL")
+    cg.add(var.set_rotation(config[CONF_ROTATION]))
     if CONF_CAPTURE_ID in config:
         sensor = await text_sensor.new_text_sensor(config[CONF_CAPTURE_ID])
         cg.add(var.set_capture_id_sensor(sensor))
