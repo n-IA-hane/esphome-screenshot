@@ -4,7 +4,7 @@ The initial extraction at `e0ad6ed` copied the four component files byte for byt
 [ESPHome Intercom commit `03436d6e433c6a4306f095fe4f1b01de389f0c2e`](https://github.com/n-IA-hane/esphome-intercom/tree/03436d6e433c6a4306f095fe4f1b01de389f0c2e/esphome/components/esp_screenshot).
 
 The source directory was `esphome/components/esp_screenshot/`. The same path is
-used here. This extraction changes packaging, examples and ownership of tests;
+used here. The initial extraction changed packaging, examples and ownership of tests;
 it did not refactor the capture, HTTP publication or worker implementation.
 The hashes below preserve that extraction witness. Subsequent development,
 including explicit image-buffer admission, is recorded separately in Git.
@@ -21,5 +21,9 @@ preserved. Screenshot-owned configuration and runtime tests live here; the
 P4 provider-copy test and optional Home Assistant helper test remain in
 Intercom, with their owning integrations.
 
-The framebuffer provider remains Intercom's `mipi_dsi` implementation and must
-provide `copy_frame_buffer_rgb565`. LVGL capture needs no Intercom component.
+Current capture selects public `copy_frame_buffer_rgb565` readback when the
+display owner advertises that capability. Otherwise, it uses the normal LVGL
+capture path. Intercom is not required by the component; the coordinated P4
+configuration selects a compatible readback provider when composed framebuffer
+capture is needed. The [current capture guide](README.md) describes backend
+selection, the deprecated `mipi_dsi_id` selector and the public owner contract.
