@@ -332,8 +332,8 @@ affinity, priority, stack placement and minimum free stack bytes.
 
 ## Local development and complete LVGL example
 
-Version: `2026.11.1-dev`. The initial extraction copied the four component
-implementation files without byte changes from Intercom commit `03436d6e433c6a4306f095fe4f1b01de389f0c2e`.
+The component has its own [source history](SOURCE.md). The initial extraction
+copied the four component implementation files without byte changes from Intercom commit `03436d6e433c6a4306f095fe4f1b01de389f0c2e`.
 The original MIT license and [source hashes](SOURCE.md) are preserved. No Home Assistant Python package is needed
 to develop or use this component.
 
@@ -369,9 +369,10 @@ An ordinary automation can call `esp_screenshot.capture` directly instead.
 
 For a remote checkout, use the Git source with `path: esphome/components` shown
 above. `main` is the default branch and `dev` is the development branch.
-Both initially contain `2026.11.1-dev`; no stable release is tagged yet.
-Pin an appropriate reviewed ref for your deployment. The native package also
-supports the standard remote package include:
+For the coordinated VoIP Stack preview, use the screenshot commit in the
+[release source manifest](https://github.com/n-IA-hane/esphome-intercom/releases/tag/v2026.12.0-dev).
+Standalone projects should pin an appropriate reviewed ref for their deployment.
+The native package also supports the standard remote package include:
 
 ```yaml
 packages:
